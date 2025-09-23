@@ -4,6 +4,8 @@ _Breaking Changes_:
 
 `filePath` in `FlutterAVPlayerView` is used for files stored in the TemporaryDirectory and the new `assetPath` is used for assets stored in the `rootBundle` of your application.
 
+iOS26 is fully suppported.
+
 ## 2.0.5
 
 - Fixed issue#29 - Offline downloaded file not playing
