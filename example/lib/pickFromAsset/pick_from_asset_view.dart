@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_to_airplay/flutter_to_airplay.dart';
 
-class PickFromURLView extends StatelessWidget {
+class PickFromAssetView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -18,19 +18,13 @@ class PickFromURLView extends StatelessWidget {
             ),
           ),
           actions: [
-            AirPlayRoutePickerView(
-              tintColor: Colors.white,
-              activeTintColor: Colors.white,
-              backgroundColor: Colors.transparent,
-            ),
+            AirPlayIconButton(),
           ],
         ),
         body: SafeArea(
           child: Center(
             child: FlutterAVPlayerView(
-              urlString:
-                  'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
-              autoLoop: true,
+              assetPath: 'assets/videos/butterfly.mp4',
             ),
           ),
         ),
