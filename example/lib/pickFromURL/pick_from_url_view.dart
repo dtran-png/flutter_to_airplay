@@ -30,6 +30,7 @@ class PickFromURLView extends StatelessWidget {
             child: FlutterAVPlayerView(
               urlString:
                   'https://flutter.github.io/assets-for-api-docs/assets/videos/butterfly.mp4',
+              autoLoop: true,
             ),
           ),
         ),

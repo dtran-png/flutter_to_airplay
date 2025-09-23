@@ -6,6 +6,14 @@ import 'package:flutter/services.dart';
 /// and control its width and height.
 
 class FlutterAVPlayerView extends StatelessWidget {
+  const FlutterAVPlayerView({
+    Key? key,
+    this.urlString,
+    this.filePath,
+    this.assetPath,
+    this.autoLoop = false,
+  })  : assert(urlString != null || filePath != null),
+  
   const FlutterAVPlayerView(
       {Key? key, this.urlString, this.filePath, this.assetPath})
       : assert(urlString != null || filePath != null || assetPath != null),
@@ -19,23 +27,25 @@ class FlutterAVPlayerView extends StatelessWidget {
 
   /// File name/path for the video file that needs to be played from the Temporary or Document directory.
   final String? filePath;
+  
+  /// Boolean to enable/disable autoLoop
+  final bool autoLoop;
 
   /// This function packs the available parameters to be sent to native code.
   /// It will check for the URL first, if it is available, then it will be used,
   /// otherwise filePath will be used.
   /// It is preferred that only one of urlString or filePath is used at a time,
   /// if both are provided, application will prioritise urlString.
-  Map getCreateParams() {
-    Map params = {
+  Map<String, dynamic> getCreateParams() {
+    Map<String, dynamic> params = {
       'class': 'FlutterAVPlayerView',
     };
-    if (urlString != null && urlString!.length > 0) {
-      params['url'] = urlString;
-    } else if (filePath != null && filePath!.length > 0) {
-      params['file'] = filePath;
-    } else {
-      params['asset'] = assetPath;
-    }
+
+    params['url'] = urlString;
+    params['file'] = filePath;
+    params['asset'] = assetPath;
+    params['autoLoop'] = autoLoop;
+
     return params;
   }
 
