@@ -54,10 +54,10 @@ class FlutterRoutePickerView: NSObject, FlutterPlatformView {
     }
     
     static func mapToColor(_ map: Dictionary<String, Any>) -> UIColor {
-        return  UIColor.init(red: CGFloat(map["red"] as! Int) / 255,
-                             green: CGFloat(map["green"] as! Int) / 255,
-                             blue: CGFloat(map["blue"] as! Int) / 255,
-                             alpha: CGFloat(map["alpha"] as! Int) / 255)
+        return  UIColor.init(red: CGFloat(truncating: map["red"] as! NSNumber),
+                             green: CGFloat(truncating: map["green"] as! NSNumber),
+                             blue: CGFloat(truncating: map["blue"] as! NSNumber),
+                             alpha: CGFloat(truncating: map["alpha"] as! NSNumber))
     }
 }
 

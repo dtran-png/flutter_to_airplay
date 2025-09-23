@@ -8,13 +8,19 @@ class CustomIconView extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         appBar: AppBar(
-          title: const Text('Flutter 2 Airplay'),
+          title: Text(
+            'Flutter 2 Airplay',
+            style: TextStyle(
+              color: Colors.blueGrey.shade400,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
           leading: IconButton(
             alignment: Alignment.centerLeft,
             onPressed: () => Navigator.pop(context),
             icon: Icon(
               Icons.arrow_back,
-              color: Colors.white,
+              color: Colors.blueGrey.shade400,
             ),
           ),
           actions: [
@@ -25,7 +31,10 @@ class CustomIconView extends StatelessWidget {
                 children: [
                   IconButton(
                     onPressed: null,
-                    icon: Icon(Icons.play_arrow),
+                    icon: Icon(
+                      Icons.play_arrow,
+                      color: Colors.blueGrey.shade400,
+                    ),
                   ),
                   AirPlayRoutePickerView(
                     tintColor: Colors.transparent,

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_to_airplay/flutter_to_airplay.dart';
+import 'package:flutter_to_airplay_example/Utils/ui_utils.dart';
 import 'package:path_provider/path_provider.dart';
 
 class PickFromFileView extends StatefulWidget {
@@ -68,20 +69,7 @@ class _PickFromFileViewState extends State<PickFromFileView> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Flutter 2 Airplay'),
-          leading: IconButton(
-            alignment: Alignment.centerLeft,
-            onPressed: () => Navigator.pop(context),
-            icon: Icon(
-              Icons.arrow_back,
-              color: Colors.white,
-            ),
-          ),
-          actions: [
-            AirPlayIconButton(),
-          ],
-        ),
+        appBar: createAppBar(() => Navigator.pop(context)),
         body: SafeArea(
           child: Center(
             child: _filePath == null

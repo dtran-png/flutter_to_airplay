@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_to_airplay/flutter_to_airplay.dart';
+import 'package:flutter_to_airplay_example/Utils/ui_utils.dart';
 
 class PickFromAssetView extends StatelessWidget {
   @override
@@ -7,20 +8,7 @@ class PickFromAssetView extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Flutter 2 Airplay'),
-          leading: IconButton(
-            alignment: Alignment.centerLeft,
-            onPressed: () => Navigator.pop(context),
-            icon: Icon(
-              Icons.arrow_back,
-              color: Colors.white,
-            ),
-          ),
-          actions: [
-            AirPlayIconButton(),
-          ],
-        ),
+        appBar: createAppBar(() => Navigator.pop(context)),
         body: SafeArea(
           child: Center(
             child: FlutterAVPlayerView(

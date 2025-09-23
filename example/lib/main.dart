@@ -15,7 +15,13 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         appBar: AppBar(
-          title: const Text('Flutter 2 Airplay'),
+          title: Text(
+            'Flutter 2 Airplay',
+            style: TextStyle(
+              color: Colors.blueGrey.shade400,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ),
         body: SafeArea(
           child: Container(

@@ -12,12 +12,7 @@ class FlutterAVPlayerView extends StatelessWidget {
     this.filePath,
     this.assetPath,
     this.autoLoop = false,
-  })  : assert(urlString != null || filePath != null),
-  
-  const FlutterAVPlayerView(
-      {Key? key, this.urlString, this.filePath, this.assetPath})
-      : assert(urlString != null || filePath != null || assetPath != null),
-        super(key: key);
+  }) : assert(urlString != null || filePath != null || assetPath != null);
 
   /// URL string for the video file, if the file is to be played from the network.
   final String? urlString;
@@ -27,7 +22,7 @@ class FlutterAVPlayerView extends StatelessWidget {
 
   /// File name/path for the video file that needs to be played from the Temporary or Document directory.
   final String? filePath;
-  
+
   /// Boolean to enable/disable autoLoop
   final bool autoLoop;
 
@@ -41,11 +36,15 @@ class FlutterAVPlayerView extends StatelessWidget {
       'class': 'FlutterAVPlayerView',
     };
 
-    params['url'] = urlString;
-    params['file'] = filePath;
-    params['asset'] = assetPath;
-    params['autoLoop'] = autoLoop;
+    if (urlString != null) {
+      params['url'] = urlString;
+    } else if (filePath != null) {
+      params['file'] = filePath;
+    } else if (assetPath != null) {
+      params['asset'] = assetPath;
+    }
 
+    params['autoLoop'] = autoLoop;
     return params;
   }
 
