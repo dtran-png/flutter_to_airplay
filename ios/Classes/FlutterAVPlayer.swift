@@ -37,7 +37,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         } 
         else if let filePath = arguments["asset"] {
             let appDelegate = UIApplication.shared.delegate as! FlutterAppDelegate
-            let vc = appDelegate.window.rootViewController as! FlutterViewController
+            let vc = appDelegate.window?.rootViewController as! FlutterViewController
             let lookUpKey = vc.lookupKey(forAsset: filePath as! String)
             
             if let path = Bundle.main.path(forResource: lookUpKey, ofType: nil) {
