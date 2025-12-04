@@ -160,8 +160,10 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             // Setup extra audio player if audio URL is provided
             setupAudioPlayer(arguments: arguments)
             
-            // Sync audio player with video player
-            setupAudioPlayerSync()
+            // Sync audio player with video player (only if audio player exists)
+            if audioPlayer != nil {
+                setupAudioPlayerSync()
+            }
             
             // Setup custom controls
             setupCustomControls()
@@ -413,19 +415,13 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             self.audioSyncObserver = nil
         }
         
-        // Remove observer for time control status
-        do {
-            try player?.removeObserver(self, forKeyPath: "timeControlStatus")
-        } catch {
-            // Observer might not be registered, ignore error
+        // Remove observer for time control status (only if audio player was set up)
+        if audioPlayer != nil {
+            player?.removeObserver(self, forKeyPath: "timeControlStatus")
         }
         
         // Remove observer for player item status
-        do {
-            try playerItem?.removeObserver(self, forKeyPath: "status")
-        } catch {
-            // Observer might not be registered, ignore error
-        }
+        playerItem?.removeObserver(self, forKeyPath: "status")
         
         // Cleanup custom controls
         controlsOverlay?.removeFromSuperview()
