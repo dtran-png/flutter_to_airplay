@@ -33,35 +33,42 @@ class PlayerManager {
     private init() {}
 }
 
+// MARK: - FlutterAVPlayer
+
 class FlutterAVPlayer: NSObject, FlutterPlatformView {
-    private var _flutterAVPlayerViewController : AVPlayerViewController;
+    private var _flutterAVPlayerViewController: AVPlayerViewController
     
-    private var looper : AVPlayerLooper?
+    private var looper: AVPlayerLooper?
     private var playerItem: AVPlayerItem?
     private var audioPlayerItem: AVPlayerItem?
     private var timeObserver: Any?
     private var audioSyncObserver: Any?
     private var maxDuration: Double?
+    private var autoLoop: Bool = false
     private var player: AVPlayer?
     private var audioPlayer: AVPlayer?
     private var playerKey: String?
-    private var pipObserver: NSObjectProtocol?
     private var methodChannel: FlutterMethodChannel?
+    
+    // PiP
+    private var pipController: AVPictureInPictureController?
     
     // Custom controls
     private var controlsOverlay: CustomPlaybackControlsView?
     private var controlsHideTimer: Timer?
+    private var hasNotifiedMaxDuration = false
 
-    init(frame:CGRect,
-          viewIdentifier: CLongLong,
-          arguments: Dictionary<String, Any>,
-          binaryMessenger: FlutterBinaryMessenger) {
-        let autoLoop = arguments["autoLoop"] as? Bool ?? false
+    init(frame: CGRect,
+         viewIdentifier: CLongLong,
+         arguments: Dictionary<String, Any>,
+         binaryMessenger: FlutterBinaryMessenger) {
+        
+        autoLoop = arguments["autoLoop"] as? Bool ?? false
         maxDuration = arguments["maxDuration"] as? Double
         
         // Create a unique key for this player instance
         playerKey = "player_\(viewIdentifier)"
-
+        
         // Initialize the view controller first
         _flutterAVPlayerViewController = AVPlayerViewController()
         
@@ -87,7 +94,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         } catch {
             print("Failed to configure audio session: \(error)")
         }
-
+        
         _flutterAVPlayerViewController.allowsPictureInPicturePlayback = true
         _flutterAVPlayerViewController.showsPlaybackControls = false
         
@@ -102,28 +109,27 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         _flutterAVPlayerViewController.viewDidLoad()
         
         let queuePlayer = AVQueuePlayer()
-
-        if let urlString = arguments["url"] {
-            let url = URL(string: urlString as! String)!
+        
+        if let urlString = arguments["url"] as? String {
+            let url = URL(string: urlString)!
             playerItem = AVPlayerItem(url: url)
-        } else if let filePath = arguments["file"] {
-            let fileUrl = URL(fileURLWithPath: filePath as! String)
+        } else if let filePath = arguments["file"] as? String {
+            let fileUrl = URL(fileURLWithPath: filePath)
             playerItem = AVPlayerItem(url: fileUrl)
-        } 
-        else if let filePath = arguments["asset"] {
+        } else if let filePath = arguments["asset"] as? String {
             let appDelegate = UIApplication.shared.delegate as! FlutterAppDelegate
             let vc = appDelegate.window?.rootViewController as! FlutterViewController
-            let lookUpKey = vc.lookupKey(forAsset: filePath as! String)
+            let lookUpKey = vc.lookupKey(forAsset: filePath)
             
             if let path = Bundle.main.path(forResource: lookUpKey, ofType: nil) {
                 playerItem = AVPlayerItem(url: URL(fileURLWithPath: path))
             } else {
-                playerItem = AVPlayerItem(url: URL(fileURLWithPath: filePath as! String))
+                playerItem = AVPlayerItem(url: URL(fileURLWithPath: filePath))
             }
         }
         
         if let playerItem = playerItem {
-            if (autoLoop){
+            if autoLoop {
                 looper = AVPlayerLooper(player: queuePlayer, templateItem: playerItem)
                 _flutterAVPlayerViewController.player = queuePlayer
                 player = queuePlayer
@@ -131,6 +137,13 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                 let avPlayer = AVPlayer(playerItem: playerItem)
                 _flutterAVPlayerViewController.player = avPlayer
                 player = avPlayer
+            }
+            
+            // Setup PiP controller
+            if let player = player, AVPictureInPictureController.isPictureInPictureSupported() {
+                let playerLayer = AVPlayerLayer(player: player)
+                pipController = AVPictureInPictureController(playerLayer: playerLayer)
+                pipController?.delegate = self
             }
             
             // Setup duration limiting if maxDuration is specified
@@ -165,18 +178,19 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         controlsOverlay = controlsView
         
         // Add controls overlay to the player view
-        _flutterAVPlayerViewController.view.addSubview(controlsView)
+        let containerView = _flutterAVPlayerViewController.view!
+        containerView.addSubview(controlsView)
         controlsView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            controlsView.topAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.topAnchor),
-            controlsView.leadingAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.leadingAnchor),
-            controlsView.trailingAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.trailingAnchor),
-            controlsView.bottomAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.bottomAnchor)
+            controlsView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            controlsView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            controlsView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            controlsView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
         ])
         
         // Add tap gesture to show/hide controls
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
-        _flutterAVPlayerViewController.view.addGestureRecognizer(tapGesture)
+        containerView.addGestureRecognizer(tapGesture)
         
         // Observe player item duration
         if let playerItem = playerItem {
@@ -211,6 +225,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     }
     
     private func setupDurationLimit(player: AVPlayer, maxDuration: Double) {
+        hasNotifiedMaxDuration = false // Reset flag
         let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { [weak self] time in
             guard let self = self else { return }
@@ -219,13 +234,16 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             // Update custom controls
             self.controlsOverlay?.updateTime(currentTime: time)
             
-            if currentTime >= maxDuration {
+            if currentTime >= maxDuration && !self.hasNotifiedMaxDuration {
+                self.hasNotifiedMaxDuration = true
                 player.pause()
                 self.audioPlayer?.pause()
                 // Seek to the max duration position
                 let seekTime = CMTime(seconds: maxDuration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
                 player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
                 self.audioPlayer?.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                // Notify Flutter that maxDuration was reached
+                self.notifyPlayerClosed()
             }
         }
     }
@@ -286,7 +304,11 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                 
                 // If time difference is more than 0.5 seconds, sync the audio player
                 if timeDiff > 0.5 {
-                    audioPlayer.seek(to: time, toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC)))
+                    audioPlayer.seek(
+                        to: time,
+                        toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC)),
+                        toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+                    )
                 }
             }
         }
@@ -294,9 +316,16 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     
     @objc private func videoDidFinishPlaying() {
         audioPlayer?.pause()
+        // Notify Flutter that video ended (only if not looping)
+        if !autoLoop {
+            notifyPlayerClosed()
+        }
     }
     
-    override func observeValue(forKeyPath keyPath: String?, of object: Any?, change: [NSKeyValueChangeKey : Any]?, context: UnsafeMutableRawPointer?) {
+    override func observeValue(forKeyPath keyPath: String?,
+                               of object: Any?,
+                               change: [NSKeyValueChangeKey : Any]?,
+                               context: UnsafeMutableRawPointer?) {
         if keyPath == "timeControlStatus", let player = object as? AVPlayer {
             guard let change = change,
                   let newValue = change[NSKeyValueChangeKey.newKey] as? Int,
@@ -312,9 +341,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                     switch newStatus {
                     case .playing:
                         // Sync audio player time with video player
-                        if let currentTime = player.currentTime() as CMTime? {
-                            audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                        }
+                        let currentTime = player.currentTime()
+                        audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
                         audioPlayer.play()
                         // Update play button state
                         self.controlsOverlay?.updatePlayButton(isPlaying: true)
@@ -337,7 +365,6 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                 }
             }
         } else {
-            // Call super for any unhandled key paths
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
         }
     }
@@ -419,6 +446,10 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         audioPlayer = nil
         looper = nil
         
+        // PiP controller
+        pipController?.stopPictureInPicture()
+        pipController = nil
+        
         // Unregister from manager
         if let key = playerKey {
             PlayerManager.shared.unregisterPlayer(forKey: key)
@@ -430,16 +461,12 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     }
     
     deinit {
-        // Remove observer
         NotificationCenter.default.removeObserver(self)
-        
-        // Always force cleanup when deallocating
-        // This ensures all resources are released
         forceCleanup()
     }
-
+    
     func view() -> UIView {
-        return _flutterAVPlayerViewController.view;
+        return _flutterAVPlayerViewController.view
     }
     
     private func handleMethodCall(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -450,7 +477,9 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                 setVolumeBalance(balance: balance)
                 result(nil)
             } else {
-                result(FlutterError(code: "INVALID_ARGUMENT", message: "Balance must be a double between 0.0 and 1.0", details: nil))
+                result(FlutterError(code: "INVALID_ARGUMENT",
+                                    message: "Balance must be a double between 0.0 and 1.0",
+                                    details: nil))
             }
         case "dispose":
             // Force cleanup when widget is disposed
@@ -478,6 +507,18 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
 }
 
 // MARK: - CustomPlaybackControlsDelegate
+
+protocol CustomPlaybackControlsDelegate: AnyObject {
+    func didTapPlayPause()
+    func didSeek(to time: CMTime)
+    func didTapForward10Seconds()
+    func didTapReplay10Seconds()
+    func didTapPictureInPicture()
+    func didTapClose()
+}
+
+// MARK: - FlutterAVPlayer + CustomPlaybackControlsDelegate
+
 extension FlutterAVPlayer: CustomPlaybackControlsDelegate {
     func didTapPlayPause() {
         guard let player = player else { return }
@@ -494,25 +535,113 @@ extension FlutterAVPlayer: CustomPlaybackControlsDelegate {
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         audioPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
+    
+    func didTapForward10Seconds() {
+        guard let player = player else { return }
+        let currentTime = player.currentTime()
+        let newTime = CMTimeAdd(currentTime, CMTime(seconds: 10, preferredTimescale: CMTimeScale(NSEC_PER_SEC)))
+        
+        // Check if maxDuration is set and clamp to it
+        if let maxDuration = maxDuration {
+            let maxDurationTime = CMTime(seconds: maxDuration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+            let clampedTime = CMTimeCompare(newTime, maxDurationTime) > 0 ? maxDurationTime : newTime
+            player.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            audioPlayer?.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        } else {
+            // Check against video duration
+            if let duration = player.currentItem?.duration {
+                let clampedTime = CMTimeCompare(newTime, duration) > 0 ? duration : newTime
+                player.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                audioPlayer?.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            } else {
+                player.seek(to: newTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                audioPlayer?.seek(to: newTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+        }
+    }
+    
+    func didTapReplay10Seconds() {
+        guard let player = player else { return }
+        let currentTime = player.currentTime()
+        let newTime = CMTimeSubtract(currentTime, CMTime(seconds: 10, preferredTimescale: CMTimeScale(NSEC_PER_SEC)))
+        
+        // Clamp to zero (can't go before start)
+        let zeroTime = CMTime.zero
+        let clampedTime = CMTimeCompare(newTime, zeroTime) < 0 ? zeroTime : newTime
+        
+        player.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        audioPlayer?.seek(to: clampedTime, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+    
+    func didTapPictureInPicture() {
+       guard let pip = pipController else { return }
+        DispatchQueue.main.async {
+            if pip.isPictureInPictureActive {
+                pip.stopPictureInPicture()
+            } else {
+                pip.startPictureInPicture()
+            }
+        }
+    }
+    
+    func didTapClose() {
+        // Notify Flutter that player was closed
+        notifyPlayerClosed()
+        
+        // Cleanup player after notifying Flutter
+        forceCleanup()
+    }
+    
+    private func notifyPlayerClosed() {
+        // Store method channel reference before cleanup (cleanup sets it to nil)
+        guard let channel = methodChannel else {
+            print("FlutterAVPlayer: methodChannel is nil, cannot notify Flutter")
+            return
+        }
+        
+        // Notify Flutter that player was closed (must be done before cleanup)
+        // Ensure we're on the main thread
+        let notifyFlutter = {
+            channel.invokeMethod("onPlayerClosed", arguments: nil) { (result: Any?) in
+                if let error = result as? FlutterError {
+                    print("FlutterAVPlayer: Error invoking onPlayerClosed: \(error)")
+                } else if FlutterMethodNotImplemented.isEqual(result) {
+                    print("FlutterAVPlayer: onPlayerClosed method not implemented in Flutter")
+                }
+            }
+        }
+        
+        if Thread.isMainThread {
+            notifyFlutter()
+        } else {
+            DispatchQueue.main.sync {
+                notifyFlutter()
+            }
+        }
+    }
 }
 
 // MARK: - CustomPlaybackControlsView
-protocol CustomPlaybackControlsDelegate: AnyObject {
-    func didTapPlayPause()
-    func didSeek(to time: CMTime)
-}
 
 class CustomPlaybackControlsView: UIView {
     weak var delegate: CustomPlaybackControlsDelegate?
     private weak var player: AVPlayer?
     private var maxDuration: Double?
     
+    private let backgroundLayer = UIView()
     private let containerView = UIView()
     private let playPauseButton = UIButton(type: .system)
+    private let forward10Button = UIButton(type: .system)
+    private let replay10Button = UIButton(type: .system)
     private let progressSlider = UISlider()
     private let currentTimeLabel = UILabel()
     private let remainingTimeLabel = UILabel()
     private let controlsStackView = UIStackView()
+    private let centerButtonsStackView = UIStackView()
+    
+    private let closeButton = UIButton(type: .system)
+    private let pipButton = UIButton(type: .system)
+    private let airplayPickerView = AVRoutePickerView()
     
     private var isDraggingSlider = false
     
@@ -530,16 +659,77 @@ class CustomPlaybackControlsView: UIView {
     private func setupUI() {
         backgroundColor = .clear
         
-        // Container view with gradient background
+        // Background layer with black color and 0.3 opacity (below all controls)
+        backgroundLayer.backgroundColor = UIColor.black.withAlphaComponent(0.3)
+        addSubview(backgroundLayer)
+        backgroundLayer.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Container view (bottom bar)
         containerView.backgroundColor = UIColor.black.withAlphaComponent(0.6)
         addSubview(containerView)
         containerView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Replay 10 seconds button
+        replay10Button.setImage(UIImage(systemName: "gobackward.10"), for: .normal)
+        replay10Button.tintColor = .white
+        replay10Button.addTarget(self, action: #selector(replay10Tapped), for: .touchUpInside)
+        replay10Button.translatesAutoresizingMaskIntoConstraints = false
         
         // Play/Pause button
         playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
         playPauseButton.tintColor = .white
         playPauseButton.addTarget(self, action: #selector(playPauseTapped), for: .touchUpInside)
         playPauseButton.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Forward 10 seconds button
+        forward10Button.setImage(UIImage(systemName: "goforward.10"), for: .normal)
+        forward10Button.tintColor = .white
+        forward10Button.addTarget(self, action: #selector(forward10Tapped), for: .touchUpInside)
+        forward10Button.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Bigger SF Symbol size for center buttons
+        let largeSymbolConfig = UIImage.SymbolConfiguration(pointSize: 48, weight: .bold)
+        replay10Button.setPreferredSymbolConfiguration(largeSymbolConfig, forImageIn: .normal)
+        playPauseButton.setPreferredSymbolConfiguration(largeSymbolConfig, forImageIn: .normal)
+        forward10Button.setPreferredSymbolConfiguration(largeSymbolConfig, forImageIn: .normal)
+        
+        // Close button (top-left, left of PiP button)
+        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+        closeButton.tintColor = .white
+        closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(closeButton)
+        
+        // PiP button (top-left, right of close button)
+        if #available(iOS 15.0, *) {
+            pipButton.setImage(UIImage(systemName: "pip.enter"), for: .normal)
+        } else {
+            pipButton.setImage(UIImage(systemName: "rectangle.arrowtriangle.2.inward"), for: .normal)
+        }
+        pipButton.tintColor = .white
+        pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
+        pipButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(pipButton)
+        
+        // AirPlay picker (top-right)
+        airplayPickerView.translatesAutoresizingMaskIntoConstraints = false
+        airplayPickerView.tintColor = .white
+        if #available(iOS 13.0, *) {
+            airplayPickerView.activeTintColor = .systemBlue
+        }
+        addSubview(airplayPickerView)
+        
+        // Center buttons stack view (replay, play/pause, forward)
+        centerButtonsStackView.axis = .horizontal
+        centerButtonsStackView.spacing = 20
+        centerButtonsStackView.alignment = .center
+        centerButtonsStackView.distribution = .equalSpacing
+        centerButtonsStackView.translatesAutoresizingMaskIntoConstraints = false
+        
+        centerButtonsStackView.addArrangedSubview(replay10Button)
+        centerButtonsStackView.addArrangedSubview(playPauseButton)
+        centerButtonsStackView.addArrangedSubview(forward10Button)
+        addSubview(centerButtonsStackView)
         
         // Progress slider
         progressSlider.minimumTrackTintColor = .systemBlue
@@ -571,40 +761,83 @@ class CustomPlaybackControlsView: UIView {
         controlsStackView.addArrangedSubview(progressSlider)
         controlsStackView.addArrangedSubview(remainingTimeLabel)
         
-        // Add all views to container
-        containerView.addSubview(playPauseButton)
         containerView.addSubview(controlsStackView)
         
         // Layout constraints
         NSLayoutConstraint.activate([
-            // Container view
+            // Background layer (covers entire view, below all controls)
+            backgroundLayer.topAnchor.constraint(equalTo: topAnchor),
+            backgroundLayer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundLayer.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundLayer.bottomAnchor.constraint(equalTo: bottomAnchor),
+            
+            // Center buttons stack view (middle of the view)
+            centerButtonsStackView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            centerButtonsStackView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            
+            // Button sizes
+            replay10Button.widthAnchor.constraint(equalToConstant: 90),
+            replay10Button.heightAnchor.constraint(equalToConstant: 90),
+            playPauseButton.widthAnchor.constraint(equalToConstant: 90),
+            playPauseButton.heightAnchor.constraint(equalToConstant: 90),
+            forward10Button.widthAnchor.constraint(equalToConstant: 90),
+            forward10Button.heightAnchor.constraint(equalToConstant: 90),
+            
+            // Container view (bottom bar)
             containerView.leadingAnchor.constraint(equalTo: leadingAnchor),
             containerView.trailingAnchor.constraint(equalTo: trailingAnchor),
             containerView.bottomAnchor.constraint(equalTo: bottomAnchor),
             containerView.heightAnchor.constraint(equalToConstant: 100),
             
-            // Play/Pause button
-            playPauseButton.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
-            playPauseButton.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
-            playPauseButton.widthAnchor.constraint(equalToConstant: 44),
-            playPauseButton.heightAnchor.constraint(equalToConstant: 44),
-            
-            // Controls stack view
-            controlsStackView.leadingAnchor.constraint(equalTo: playPauseButton.trailingAnchor, constant: 16),
+            // Controls stack (time labels + slider)
+            controlsStackView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
             controlsStackView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -20),
             controlsStackView.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
             
             // Time labels width
             currentTimeLabel.widthAnchor.constraint(equalToConstant: 60),
-            remainingTimeLabel.widthAnchor.constraint(equalToConstant: 60)
+            remainingTimeLabel.widthAnchor.constraint(equalToConstant: 60),
+            
+            // Close button top-left
+            closeButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeButton.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            closeButton.widthAnchor.constraint(equalToConstant: 32),
+            closeButton.heightAnchor.constraint(equalToConstant: 32),
+            
+            // PiP button top-left (right of close button)
+            pipButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
+            pipButton.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: 12),
+            pipButton.widthAnchor.constraint(equalToConstant: 32),
+            pipButton.heightAnchor.constraint(equalToConstant: 32),
+            
+            // AirPlay picker top-right
+            airplayPickerView.centerYAnchor.constraint(equalTo: pipButton.centerYAnchor),
+            airplayPickerView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            airplayPickerView.widthAnchor.constraint(equalToConstant: 32),
+            airplayPickerView.heightAnchor.constraint(equalToConstant: 32)
         ])
         
-        // Initially hidden
         isHidden = true
     }
     
     @objc private func playPauseTapped() {
         delegate?.didTapPlayPause()
+    }
+    
+    @objc private func forward10Tapped() {
+        delegate?.didTapForward10Seconds()
+    }
+    
+    @objc private func replay10Tapped() {
+        delegate?.didTapReplay10Seconds()
+    }
+    
+    @objc private func pipTapped() {
+        delegate?.didTapPictureInPicture()
+    }
+    
+    @objc private func closeTapped() {
+        delegate?.didTapClose()
     }
     
     @objc private func sliderTouchDown() {
@@ -615,7 +848,6 @@ class CustomPlaybackControlsView: UIView {
         isDraggingSlider = false
         guard let player = player else { return }
         
-        // Use maxDuration if set, otherwise use video duration
         let effectiveDuration: Double
         if let maxDuration = maxDuration {
             effectiveDuration = maxDuration
@@ -625,15 +857,16 @@ class CustomPlaybackControlsView: UIView {
             return
         }
         
-        let time = CMTime(seconds: Double(progressSlider.value) * effectiveDuration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        let time = CMTime(
+            seconds: Double(progressSlider.value) * effectiveDuration,
+            preferredTimescale: CMTimeScale(NSEC_PER_SEC)
+        )
         delegate?.didSeek(to: time)
     }
     
     @objc private func sliderValueChanged() {
-        // Update time labels while dragging
         guard let player = player else { return }
         
-        // Use maxDuration if set, otherwise use video duration
         let effectiveDuration: Double
         if let maxDuration = maxDuration {
             effectiveDuration = maxDuration
@@ -652,12 +885,18 @@ class CustomPlaybackControlsView: UIView {
         playPauseButton.setImage(UIImage(systemName: imageName), for: .normal)
     }
     
+    func updatePictureInPicture(isActive: Bool) {
+        if #available(iOS 15.0, *) {
+            let name = isActive ? "pip.exit" : "pip.enter"
+            pipButton.setImage(UIImage(systemName: name), for: .normal)
+        }
+    }
+    
     func updateTime(currentTime: CMTime) {
         guard !isDraggingSlider, let player = player else { return }
         
         let currentSeconds = CMTimeGetSeconds(currentTime)
         
-        // Use maxDuration if set, otherwise use video duration
         let effectiveDuration: Double
         if let maxDuration = maxDuration {
             effectiveDuration = maxDuration
@@ -667,14 +906,11 @@ class CustomPlaybackControlsView: UIView {
             return
         }
         
-        // Update slider - use effective duration for slider calculation
         if effectiveDuration > 0 {
-            // Clamp current time to effective duration
             let clampedCurrent = min(currentSeconds, effectiveDuration)
             progressSlider.value = Float(clampedCurrent / effectiveDuration)
         }
         
-        // Update labels
         updateTimeLabels(current: currentSeconds, effectiveDuration: effectiveDuration)
     }
     
@@ -683,7 +919,6 @@ class CustomPlaybackControlsView: UIView {
         
         let currentSeconds = CMTimeGetSeconds(player.currentTime())
         
-        // Use maxDuration if set, otherwise use video duration
         let effectiveDuration: Double
         if let maxDuration = maxDuration {
             effectiveDuration = maxDuration
@@ -697,11 +932,8 @@ class CustomPlaybackControlsView: UIView {
     }
     
     private func updateTimeLabels(current: Double, effectiveDuration: Double) {
-        // Update current time
         currentTimeLabel.text = formatTime(current)
         
-        // Calculate remaining time based on effective duration (maxDuration or original duration)
-        // Clamp current time to effective duration to avoid negative remaining time
         let clampedCurrent = min(current, effectiveDuration)
         let remaining = effectiveDuration - clampedCurrent
         remainingTimeLabel.text = "-\(formatTime(remaining))"
@@ -723,3 +955,23 @@ class CustomPlaybackControlsView: UIView {
     }
 }
 
+// MARK: - AVPictureInPictureControllerDelegate
+
+extension FlutterAVPlayer: AVPictureInPictureControllerDelegate {
+    func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        controlsOverlay?.updatePictureInPicture(isActive: true)
+    }
+    
+    func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        controlsOverlay?.updatePictureInPicture(isActive: false)
+    }
+    
+    func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { }
+    
+    func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) { }
+    
+    func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
+                                    failedToStartPictureInPictureWithError error: Error) {
+        print("PiP failed to start: \(error)")
+    }
+}

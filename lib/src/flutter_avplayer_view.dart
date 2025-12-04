@@ -18,6 +18,7 @@ class FlutterAVPlayerView extends StatefulWidget {
     this.audioFilePath,
     this.audioAssetPath,
     this.onControllerReady,
+    this.onPlayerClosed,
   }) : assert(urlString != null || filePath != null || assetPath != null);
 
   /// URL string for the video file, if the file is to be played from the network.
@@ -49,6 +50,9 @@ class FlutterAVPlayerView extends StatefulWidget {
   /// Callback that provides the AudioBalanceController when the player is ready.
   /// Use this to get the controller for controlling volume balance.
   final ValueChanged<AudioBalanceController>? onControllerReady;
+
+  /// Callback that is called when the player is closed by the user (via close button).
+  final VoidCallback? onPlayerClosed;
 
   @override
   State<FlutterAVPlayerView> createState() => _FlutterAVPlayerViewState();
@@ -83,9 +87,29 @@ class _FlutterAVPlayerViewState extends State<FlutterAVPlayerView> {
     _methodChannel = MethodChannel(name);
     _controller = AudioBalanceController(_methodChannel!);
 
+    // Set up method call handler to receive messages from native code
+    _methodChannel!.setMethodCallHandler(_handleMethodCall);
+
     // Notify widget if there's a controller callback
     if (widget.onControllerReady != null) {
       widget.onControllerReady!(_controller!);
+    }
+  }
+
+  Future<dynamic> _handleMethodCall(MethodCall call) async {
+    switch (call.method) {
+      case 'onPlayerClosed':
+        // Player was closed by user (via close button)
+        print('FlutterAVPlayerView: Received onPlayerClosed from native');
+        if (widget.onPlayerClosed != null) {
+          widget.onPlayerClosed!();
+        } else {
+          print('FlutterAVPlayerView: onPlayerClosed callback is null');
+        }
+        break;
+      default:
+        print('FlutterAVPlayerView: Unknown method call: ${call.method}');
+        break;
     }
   }
 
