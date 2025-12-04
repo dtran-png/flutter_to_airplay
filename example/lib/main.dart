@@ -4,6 +4,8 @@ import 'package:flutter_to_airplay_example/pickFromAsset/pick_from_asset_view.da
 import 'package:flutter_to_airplay_example/pickFromFile/pick_from_file_view.dart';
 import 'package:flutter_to_airplay_example/pickFromURL/pick_from_url_view.dart';
 
+import 'audio_balance_example.dart';
+
 void main() {
   runApp(MyApp());
 }
@@ -67,7 +69,7 @@ class MyApp extends StatelessWidget {
                       onTap: () => Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => CustomIconView(),
+                          builder: (context) => AudioBalanceExample(),
                         ),
                       ),
                       title: Text('Custom Icon'),
