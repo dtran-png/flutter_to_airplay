@@ -10,6 +10,7 @@ import AVKit
 import AVFoundation
 import MediaPlayer
 import Flutter
+import UIKit
 
 // Shared manager to keep players alive across widget disposal
 class PlayerManager {
@@ -46,6 +47,10 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     private var playerKey: String?
     private var pipObserver: NSObjectProtocol?
     private var methodChannel: FlutterMethodChannel?
+    
+    // Custom controls
+    private var controlsOverlay: CustomPlaybackControlsView?
+    private var controlsHideTimer: Timer?
 
     init(frame:CGRect,
           viewIdentifier: CLongLong,
@@ -84,7 +89,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         }
 
         _flutterAVPlayerViewController.allowsPictureInPicturePlayback = true
-        _flutterAVPlayerViewController.showsPlaybackControls = true
+        _flutterAVPlayerViewController.showsPlaybackControls = false
         
         // Enable PiP to start automatically from inline if available (iOS 15+)
         if #available(iOS 15.0, *) {
@@ -132,6 +137,9 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             // Note: Duration limiting doesn't work well with autoLoop, so we skip it in that case
             if let maxDuration = maxDuration, let currentPlayer = player, !autoLoop {
                 self.setupDurationLimit(player: currentPlayer, maxDuration: maxDuration)
+            } else {
+                // Setup time observer for controls even when there's no maxDuration
+                setupTimeObserverForControls()
             }
             
             // Setup extra audio player if audio URL is provided
@@ -140,23 +148,84 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             // Sync audio player with video player
             setupAudioPlayerSync()
             
+            // Setup custom controls
+            setupCustomControls()
+            
             player?.play()
             audioPlayer?.play()
+        }
+    }
+    
+    private func setupCustomControls() {
+        guard let player = player else { return }
+        
+        // Create custom controls overlay
+        let controlsView = CustomPlaybackControlsView(player: player, maxDuration: maxDuration)
+        controlsView.delegate = self
+        controlsOverlay = controlsView
+        
+        // Add controls overlay to the player view
+        _flutterAVPlayerViewController.view.addSubview(controlsView)
+        controlsView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            controlsView.topAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.topAnchor),
+            controlsView.leadingAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.leadingAnchor),
+            controlsView.trailingAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.trailingAnchor),
+            controlsView.bottomAnchor.constraint(equalTo: _flutterAVPlayerViewController.view.bottomAnchor)
+        ])
+        
+        // Add tap gesture to show/hide controls
+        let tapGesture = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
+        _flutterAVPlayerViewController.view.addGestureRecognizer(tapGesture)
+        
+        // Observe player item duration
+        if let playerItem = playerItem {
+            playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+        }
+    }
+    
+    @objc private func toggleControls() {
+        guard let controls = controlsOverlay else { return }
+        controls.isHidden.toggle()
+        
+        if !controls.isHidden {
+            resetControlsHideTimer()
+        } else {
+            controlsHideTimer?.invalidate()
+        }
+    }
+    
+    private func resetControlsHideTimer() {
+        controlsHideTimer?.invalidate()
+        controlsHideTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+            self?.controlsOverlay?.isHidden = true
+        }
+    }
+    
+    private func setupTimeObserverForControls() {
+        guard let player = player else { return }
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { [weak self] time in
+            self?.controlsOverlay?.updateTime(currentTime: time)
         }
     }
     
     private func setupDurationLimit(player: AVPlayer, maxDuration: Double) {
         let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { [weak self] time in
-            guard self != nil else { return }
+            guard let self = self else { return }
             let currentTime = CMTimeGetSeconds(time)
+            
+            // Update custom controls
+            self.controlsOverlay?.updateTime(currentTime: time)
+            
             if currentTime >= maxDuration {
                 player.pause()
-                self?.audioPlayer?.pause()
+                self.audioPlayer?.pause()
                 // Seek to the max duration position
                 let seekTime = CMTime(seconds: maxDuration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
                 player.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                self?.audioPlayer?.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                self.audioPlayer?.seek(to: seekTime, toleranceBefore: .zero, toleranceAfter: .zero)
             }
         }
     }
@@ -247,14 +316,24 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                             audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
                         }
                         audioPlayer.play()
+                        // Update play button state
+                        self.controlsOverlay?.updatePlayButton(isPlaying: true)
                     case .paused:
                         audioPlayer.pause()
+                        // Update play button state
+                        self.controlsOverlay?.updatePlayButton(isPlaying: false)
                     case .waitingToPlayAtSpecifiedRate:
                         // Keep audio paused while video is buffering
                         break
                     @unknown default:
                         break
                     }
+                }
+            }
+        } else if keyPath == "status", let playerItem = object as? AVPlayerItem {
+            if playerItem.status == .readyToPlay {
+                DispatchQueue.main.async { [weak self] in
+                    self?.controlsOverlay?.updateDuration()
                 }
             }
         } else {
@@ -311,6 +390,19 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         } catch {
             // Observer might not be registered, ignore error
         }
+        
+        // Remove observer for player item status
+        do {
+            try playerItem?.removeObserver(self, forKeyPath: "status")
+        } catch {
+            // Observer might not be registered, ignore error
+        }
+        
+        // Cleanup custom controls
+        controlsOverlay?.removeFromSuperview()
+        controlsOverlay = nil
+        controlsHideTimer?.invalidate()
+        controlsHideTimer = nil
         
         // Stop and release players
         player?.pause()
@@ -383,6 +475,251 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         // When balance is 1.0, audio volume is 1.0 (full)
         audioPlayer?.volume = Float(clampedBalance)
     }
+}
 
+// MARK: - CustomPlaybackControlsDelegate
+extension FlutterAVPlayer: CustomPlaybackControlsDelegate {
+    func didTapPlayPause() {
+        guard let player = player else { return }
+        if player.rate > 0 {
+            player.pause()
+            audioPlayer?.pause()
+        } else {
+            player.play()
+            audioPlayer?.play()
+        }
+    }
+    
+    func didSeek(to time: CMTime) {
+        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        audioPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+}
+
+// MARK: - CustomPlaybackControlsView
+protocol CustomPlaybackControlsDelegate: AnyObject {
+    func didTapPlayPause()
+    func didSeek(to time: CMTime)
+}
+
+class CustomPlaybackControlsView: UIView {
+    weak var delegate: CustomPlaybackControlsDelegate?
+    private weak var player: AVPlayer?
+    private var maxDuration: Double?
+    
+    private let containerView = UIView()
+    private let playPauseButton = UIButton(type: .system)
+    private let progressSlider = UISlider()
+    private let currentTimeLabel = UILabel()
+    private let remainingTimeLabel = UILabel()
+    private let controlsStackView = UIStackView()
+    
+    private var isDraggingSlider = false
+    
+    init(player: AVPlayer, maxDuration: Double?) {
+        self.player = player
+        self.maxDuration = maxDuration
+        super.init(frame: .zero)
+        setupUI()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    private func setupUI() {
+        backgroundColor = .clear
+        
+        // Container view with gradient background
+        containerView.backgroundColor = UIColor.black.withAlphaComponent(0.6)
+        addSubview(containerView)
+        containerView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Play/Pause button
+        playPauseButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        playPauseButton.tintColor = .white
+        playPauseButton.addTarget(self, action: #selector(playPauseTapped), for: .touchUpInside)
+        playPauseButton.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Progress slider
+        progressSlider.minimumTrackTintColor = .systemBlue
+        progressSlider.maximumTrackTintColor = .lightGray
+        progressSlider.addTarget(self, action: #selector(sliderValueChanged), for: .valueChanged)
+        progressSlider.addTarget(self, action: #selector(sliderTouchDown), for: .touchDown)
+        progressSlider.addTarget(self, action: #selector(sliderTouchUp), for: [.touchUpInside, .touchUpOutside])
+        progressSlider.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Time labels
+        currentTimeLabel.text = "0:00"
+        currentTimeLabel.textColor = .white
+        currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
+        currentTimeLabel.textAlignment = .left
+        
+        remainingTimeLabel.text = "-0:00"
+        remainingTimeLabel.textColor = .white
+        remainingTimeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
+        remainingTimeLabel.textAlignment = .right
+        
+        // Stack view for time labels and slider
+        controlsStackView.axis = .horizontal
+        controlsStackView.spacing = 12
+        controlsStackView.alignment = .center
+        controlsStackView.distribution = .fill
+        controlsStackView.translatesAutoresizingMaskIntoConstraints = false
+        
+        controlsStackView.addArrangedSubview(currentTimeLabel)
+        controlsStackView.addArrangedSubview(progressSlider)
+        controlsStackView.addArrangedSubview(remainingTimeLabel)
+        
+        // Add all views to container
+        containerView.addSubview(playPauseButton)
+        containerView.addSubview(controlsStackView)
+        
+        // Layout constraints
+        NSLayoutConstraint.activate([
+            // Container view
+            containerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            containerView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            containerView.heightAnchor.constraint(equalToConstant: 100),
+            
+            // Play/Pause button
+            playPauseButton.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            playPauseButton.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
+            playPauseButton.widthAnchor.constraint(equalToConstant: 44),
+            playPauseButton.heightAnchor.constraint(equalToConstant: 44),
+            
+            // Controls stack view
+            controlsStackView.leadingAnchor.constraint(equalTo: playPauseButton.trailingAnchor, constant: 16),
+            controlsStackView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -20),
+            controlsStackView.centerYAnchor.constraint(equalTo: containerView.centerYAnchor),
+            
+            // Time labels width
+            currentTimeLabel.widthAnchor.constraint(equalToConstant: 60),
+            remainingTimeLabel.widthAnchor.constraint(equalToConstant: 60)
+        ])
+        
+        // Initially hidden
+        isHidden = true
+    }
+    
+    @objc private func playPauseTapped() {
+        delegate?.didTapPlayPause()
+    }
+    
+    @objc private func sliderTouchDown() {
+        isDraggingSlider = true
+    }
+    
+    @objc private func sliderTouchUp() {
+        isDraggingSlider = false
+        guard let player = player else { return }
+        
+        // Use maxDuration if set, otherwise use video duration
+        let effectiveDuration: Double
+        if let maxDuration = maxDuration {
+            effectiveDuration = maxDuration
+        } else if let duration = player.currentItem?.duration {
+            effectiveDuration = CMTimeGetSeconds(duration)
+        } else {
+            return
+        }
+        
+        let time = CMTime(seconds: Double(progressSlider.value) * effectiveDuration, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        delegate?.didSeek(to: time)
+    }
+    
+    @objc private func sliderValueChanged() {
+        // Update time labels while dragging
+        guard let player = player else { return }
+        
+        // Use maxDuration if set, otherwise use video duration
+        let effectiveDuration: Double
+        if let maxDuration = maxDuration {
+            effectiveDuration = maxDuration
+        } else if let duration = player.currentItem?.duration {
+            effectiveDuration = CMTimeGetSeconds(duration)
+        } else {
+            return
+        }
+        
+        let currentSeconds = Double(progressSlider.value) * effectiveDuration
+        updateTimeLabels(current: currentSeconds, effectiveDuration: effectiveDuration)
+    }
+    
+    func updatePlayButton(isPlaying: Bool) {
+        let imageName = isPlaying ? "pause.fill" : "play.fill"
+        playPauseButton.setImage(UIImage(systemName: imageName), for: .normal)
+    }
+    
+    func updateTime(currentTime: CMTime) {
+        guard !isDraggingSlider, let player = player else { return }
+        
+        let currentSeconds = CMTimeGetSeconds(currentTime)
+        
+        // Use maxDuration if set, otherwise use video duration
+        let effectiveDuration: Double
+        if let maxDuration = maxDuration {
+            effectiveDuration = maxDuration
+        } else if let duration = player.currentItem?.duration {
+            effectiveDuration = CMTimeGetSeconds(duration)
+        } else {
+            return
+        }
+        
+        // Update slider - use effective duration for slider calculation
+        if effectiveDuration > 0 {
+            // Clamp current time to effective duration
+            let clampedCurrent = min(currentSeconds, effectiveDuration)
+            progressSlider.value = Float(clampedCurrent / effectiveDuration)
+        }
+        
+        // Update labels
+        updateTimeLabels(current: currentSeconds, effectiveDuration: effectiveDuration)
+    }
+    
+    func updateDuration() {
+        guard let player = player else { return }
+        
+        let currentSeconds = CMTimeGetSeconds(player.currentTime())
+        
+        // Use maxDuration if set, otherwise use video duration
+        let effectiveDuration: Double
+        if let maxDuration = maxDuration {
+            effectiveDuration = maxDuration
+        } else if let duration = player.currentItem?.duration {
+            effectiveDuration = CMTimeGetSeconds(duration)
+        } else {
+            return
+        }
+        
+        updateTimeLabels(current: currentSeconds, effectiveDuration: effectiveDuration)
+    }
+    
+    private func updateTimeLabels(current: Double, effectiveDuration: Double) {
+        // Update current time
+        currentTimeLabel.text = formatTime(current)
+        
+        // Calculate remaining time based on effective duration (maxDuration or original duration)
+        // Clamp current time to effective duration to avoid negative remaining time
+        let clampedCurrent = min(current, effectiveDuration)
+        let remaining = effectiveDuration - clampedCurrent
+        remainingTimeLabel.text = "-\(formatTime(remaining))"
+    }
+    
+    private func formatTime(_ seconds: Double) -> String {
+        guard !seconds.isNaN && !seconds.isInfinite else { return "0:00" }
+        
+        let totalSeconds = Int(seconds)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let secs = totalSeconds % 60
+        
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        } else {
+            return String(format: "%d:%02d", minutes, secs)
+        }
+    }
 }
 
