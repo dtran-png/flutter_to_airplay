@@ -49,7 +49,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     private var audioPlayer: AVPlayer?
     private var playerKey: String?
     private var methodChannel: FlutterMethodChannel?
-    
+
     // PiP
     private var pipController: AVPictureInPictureController?
     
@@ -57,18 +57,20 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     private var controlsOverlay: CustomPlaybackControlsView?
     private var controlsHideTimer: Timer?
     private var hasNotifiedMaxDuration = false
+    private var showPictureInPicture: Bool = false
 
     init(frame: CGRect,
-         viewIdentifier: CLongLong,
-         arguments: Dictionary<String, Any>,
-         binaryMessenger: FlutterBinaryMessenger) {
+          viewIdentifier: CLongLong,
+          arguments: Dictionary<String, Any>,
+          binaryMessenger: FlutterBinaryMessenger) {
         
         autoLoop = arguments["autoLoop"] as? Bool ?? false
         maxDuration = arguments["maxDuration"] as? Double
+        showPictureInPicture = arguments["showPictureInPicture"] as? Bool ?? false
         
         // Create a unique key for this player instance
         playerKey = "player_\(viewIdentifier)"
-        
+
         // Initialize the view controller first
         _flutterAVPlayerViewController = AVPlayerViewController()
         
@@ -94,8 +96,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         } catch {
             print("Failed to configure audio session: \(error)")
         }
-        
-        _flutterAVPlayerViewController.allowsPictureInPicturePlayback = true
+
+        _flutterAVPlayerViewController.allowsPictureInPicturePlayback = showPictureInPicture
         _flutterAVPlayerViewController.showsPlaybackControls = false
         
         // Enable PiP to start automatically from inline if available (iOS 15+)
@@ -109,7 +111,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         _flutterAVPlayerViewController.viewDidLoad()
         
         let queuePlayer = AVQueuePlayer()
-        
+
         if let urlString = arguments["url"] as? String {
             let url = URL(string: urlString)!
             playerItem = AVPlayerItem(url: url)
@@ -342,7 +344,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                     case .playing:
                         // Sync audio player time with video player
                         let currentTime = player.currentTime()
-                        audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                            audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
                         audioPlayer.play()
                         // Update play button state
                         self.controlsOverlay?.updatePlayButton(isPlaying: true)
@@ -464,7 +466,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         NotificationCenter.default.removeObserver(self)
         forceCleanup()
     }
-    
+
     func view() -> UIView {
         return _flutterAVPlayerViewController.view
     }
@@ -709,6 +711,7 @@ class CustomPlaybackControlsView: UIView {
         pipButton.tintColor = .white
         pipButton.addTarget(self, action: #selector(pipTapped), for: .touchUpInside)
         pipButton.translatesAutoresizingMaskIntoConstraints = false
+        pipButton.isHidden = true // Show/hide based on flag
         addSubview(pipButton)
         
         // AirPlay picker (top-right)
@@ -804,14 +807,14 @@ class CustomPlaybackControlsView: UIView {
             closeButton.widthAnchor.constraint(equalToConstant: 32),
             closeButton.heightAnchor.constraint(equalToConstant: 32),
             
-            // PiP button top-left (right of close button)
+            // PiP button top-left (right of close button) - hidden
             pipButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
             pipButton.leadingAnchor.constraint(equalTo: closeButton.trailingAnchor, constant: 12),
             pipButton.widthAnchor.constraint(equalToConstant: 32),
             pipButton.heightAnchor.constraint(equalToConstant: 32),
             
-            // AirPlay picker top-right
-            airplayPickerView.centerYAnchor.constraint(equalTo: pipButton.centerYAnchor),
+            // AirPlay picker top-right (aligned with close button)
+            airplayPickerView.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
             airplayPickerView.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
             airplayPickerView.widthAnchor.constraint(equalToConstant: 32),
             airplayPickerView.heightAnchor.constraint(equalToConstant: 32)

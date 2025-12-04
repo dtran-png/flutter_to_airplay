@@ -19,6 +19,7 @@ class FlutterAVPlayerView extends StatefulWidget {
     this.audioAssetPath,
     this.onControllerReady,
     this.onPlayerClosed,
+    this.showPictureInPicture = false,
   }) : assert(urlString != null || filePath != null || assetPath != null);
 
   /// URL string for the video file, if the file is to be played from the network.
@@ -53,6 +54,9 @@ class FlutterAVPlayerView extends StatefulWidget {
 
   /// Callback that is called when the player is closed by the user (via close button).
   final VoidCallback? onPlayerClosed;
+
+  /// Whether to show the Picture-in-Picture button. Defaults to false.
+  final bool showPictureInPicture;
 
   @override
   State<FlutterAVPlayerView> createState() => _FlutterAVPlayerViewState();
@@ -145,6 +149,8 @@ class _FlutterAVPlayerViewState extends State<FlutterAVPlayerView> {
     if (widget.maxDuration != null) {
       params['maxDuration'] = widget.maxDuration;
     }
+
+    params['showPictureInPicture'] = widget.showPictureInPicture;
 
     return params;
   }

@@ -21,7 +21,7 @@ class _AudioBalanceExampleState extends State<AudioBalanceExample> {
           // Video player with extra audio
           Expanded(
             child: FlutterAVPlayerView(
-              maxDuration: 4*60,
+              showPictureInPicture: true,
               onPlayerClosed: (){
                 Navigator.of(context).pop();
               },
