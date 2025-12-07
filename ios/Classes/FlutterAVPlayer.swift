@@ -43,6 +43,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     private var audioPlayerItem: AVPlayerItem?
     private var timeObserver: Any?
     private var audioSyncObserver: Any?
+    private var seekObserver: Any?
+    private var lastKnownTime: CMTime = .zero
     private var maxDuration: Double?
     private var autoLoop: Bool = false
     private var player: AVPlayer?
@@ -168,6 +170,12 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             // Setup custom controls
             setupCustomControls()
             
+            // Setup event observers
+            setupEventObservers()
+            
+            // Initialize last known time
+            lastKnownTime = .zero
+            
             player?.play()
             audioPlayer?.play()
         }
@@ -196,10 +204,7 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
         containerView.addGestureRecognizer(tapGesture)
         
-        // Observe player item duration
-        if let playerItem = playerItem {
-            playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
-        }
+        // Note: Player item status observer is set up in setupEventObservers()
     }
     
     @objc private func toggleControls() {
@@ -275,6 +280,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
         // Create audio player if audio item exists
         if let audioPlayerItem = audioPlayerItem {
             audioPlayer = AVPlayer(playerItem: audioPlayerItem)
+            // Prevent audio player from being cast via AirPlay - only cast playerItem
+            audioPlayer?.allowsExternalPlayback = false
             // Set initial volume balance (50/50 by default)
             player?.volume = 0.5
             audioPlayer?.volume = 0.5
@@ -284,8 +291,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     private func setupAudioPlayerSync() {
         guard let player = player, let audioPlayer = audioPlayer else { return }
         
-        // Observe video player time control status to sync play/pause
-        player.addObserver(self, forKeyPath: "timeControlStatus", options: [.new, .old], context: nil)
+        // Note: timeControlStatus observer is set up in setupEventObservers() to avoid duplicates
+        // The observeValue method will handle both event notifications and audio sync
         
         // Observe when video finishes to stop audio
         NotificationCenter.default.addObserver(
@@ -320,6 +327,8 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
     
     @objc private func videoDidFinishPlaying() {
         audioPlayer?.pause()
+        // Notify end event
+        notifyEnd()
         // Notify Flutter that video ended (only if not looping)
         if !autoLoop {
             notifyPlayerClosed()
@@ -340,21 +349,29 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             
             if newStatus != oldStatus {
                 DispatchQueue.main.async { [weak self] in
-                    guard let self = self, let audioPlayer = self.audioPlayer else { return }
+                    guard let self = self else { return }
                     
                     switch newStatus {
                     case .playing:
+                        // Notify start event
+                        self.notifyStart()
                         // Sync audio player time with video player
-                        let currentTime = player.currentTime()
+                        if let audioPlayer = self.audioPlayer {
+                            let currentTime = player.currentTime()
                             audioPlayer.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                        audioPlayer.play()
+                            audioPlayer.play()
+                        }
                         // Update play button state
                         self.controlsOverlay?.updatePlayButton(isPlaying: true)
                     case .paused:
-                        audioPlayer.pause()
+                        // Notify pause event
+                        self.notifyPause()
+                        self.audioPlayer?.pause()
                         // Update play button state
                         self.controlsOverlay?.updatePlayButton(isPlaying: false)
                     case .waitingToPlayAtSpecifiedRate:
+                        // Notify buffering event
+                        self.notifyBuffering(isBuffering: true)
                         // Keep audio paused while video is buffering
                         break
                     @unknown default:
@@ -363,13 +380,158 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
                 }
             }
         } else if keyPath == "status", let playerItem = object as? AVPlayerItem {
-            if playerItem.status == .readyToPlay {
-                DispatchQueue.main.async { [weak self] in
-                    self?.controlsOverlay?.updateDuration()
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                
+                switch playerItem.status {
+                case .readyToPlay:
+                    self.controlsOverlay?.updateDuration()
+                case .failed:
+                    if let error = playerItem.error {
+                        self.notifyError(errorMessage: error.localizedDescription)
+                    } else {
+                        self.notifyError(errorMessage: "Player item failed to load")
+                    }
+                case .unknown:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        } else if keyPath == "playbackBufferEmpty", let playerItem = object as? AVPlayerItem {
+            if playerItem.isPlaybackBufferEmpty {
+                notifyBuffering(isBuffering: true)
+            }
+        } else if keyPath == "playbackLikelyToKeepUp", let playerItem = object as? AVPlayerItem {
+            if playerItem.isPlaybackLikelyToKeepUp {
+                notifyBuffering(isBuffering: false)
+            }
+        } else if keyPath == "externalPlaybackActive", let player = object as? AVPlayer {
+            // AirPlay status changed
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if player.isExternalPlaybackActive {
+                    // Get the current route to find the device name
+                    let session = AVAudioSession.sharedInstance()
+                    if let output = session.currentRoute.outputs.first,
+                       output.portType == .airPlay {
+                        self.notifyAirPlayTrigger(target: output.portName.isEmpty ? "AirPlay Device" : output.portName)
+                    } else {
+                        self.notifyAirPlayTrigger(target: "AirPlay Device")
+                    }
+                } else {
+                    self.notifyAirPlayTrigger(target: "Local")
                 }
             }
         } else {
             super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+        }
+    }
+    
+    private func setupEventObservers() {
+        guard let player = player, let playerItem = playerItem else { return }
+        
+        // Observe player item status for errors and ready state
+        // Note: This observer is also used in observeValue to update controls duration
+        playerItem.addObserver(self, forKeyPath: "status", options: [.new], context: nil)
+        
+        // Observe player item error
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerItemFailedToPlay),
+            name: NSNotification.Name.AVPlayerItemFailedToPlayToEndTime,
+            object: playerItem
+        )
+        
+        // Note: Start event is handled in timeControlStatus observer when status changes to .playing
+        
+        // Observe when playback ends
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(playerDidEndPlaying),
+            name: NSNotification.Name.AVPlayerItemDidPlayToEndTime,
+            object: playerItem
+        )
+        
+        // Observe playback buffer status for buffering events
+        playerItem.addObserver(self, forKeyPath: "playbackBufferEmpty", options: [.new], context: nil)
+        playerItem.addObserver(self, forKeyPath: "playbackLikelyToKeepUp", options: [.new], context: nil)
+        
+        // Observe time control status for play/pause events
+        player.addObserver(self, forKeyPath: "timeControlStatus", options: [.new, .old], context: nil)
+        
+        // Observe AirPlay route changes
+        setupAirPlayObserver()
+        
+        // Track seek events by observing current time changes
+        setupSeekObserver()
+    }
+    
+    private func setupSeekObserver() {
+        guard let player = player else { return }
+        // We'll detect seeks by tracking time jumps in a separate observer
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        seekObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: DispatchQueue.main) { [weak self] time in
+            guard let self = self else { return }
+            // Detect significant time jumps (seeks) - more than 1 second difference
+            let currentSeconds = CMTimeGetSeconds(time)
+            let lastSeconds = CMTimeGetSeconds(self.lastKnownTime)
+            let timeDiff = abs(currentSeconds - lastSeconds)
+            
+            // If time difference is more than 1 second and we had a previous time, it's likely a seek
+            if timeDiff > 1.0 && lastSeconds > 0 {
+                self.notifySeek(seconds: currentSeconds)
+            }
+            self.lastKnownTime = time
+        }
+    }
+    
+    private func setupAirPlayObserver() {
+        guard let player = player else { return }
+        
+        // Observe player's external playback status for AirPlay
+        player.addObserver(self, forKeyPath: "externalPlaybackActive", options: [.new], context: nil)
+        
+        // Also observe route changes for more detailed information
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(airPlayRouteChanged),
+            name: AVAudioSession.routeChangeNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func playerDidEndPlaying() {
+        notifyEnd()
+    }
+    
+    @objc private func playerItemFailedToPlay(_ notification: Notification) {
+        if let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error {
+            notifyError(errorMessage: error.localizedDescription)
+        } else {
+            notifyError(errorMessage: "Unknown playback error")
+        }
+    }
+    
+    @objc private func airPlayRouteChanged(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue) else {
+            return
+        }
+        
+        let session = AVAudioSession.sharedInstance()
+        let currentRoute = session.currentRoute
+        
+        // Check if AirPlay is active
+        if let output = currentRoute.outputs.first {
+            if output.portType == .airPlay {
+                // AirPlay is active
+                notifyAirPlayTrigger(target: output.portName.isEmpty ? "AirPlay Device" : output.portName)
+            } else if reason == .oldDeviceUnavailable && output.portType != .airPlay {
+                // AirPlay disconnected, back to local
+                notifyAirPlayTrigger(target: "Local")
+            }
         }
     }
     
@@ -415,13 +577,24 @@ class FlutterAVPlayer: NSObject, FlutterPlatformView {
             self.audioSyncObserver = nil
         }
         
-        // Remove observer for time control status (only if audio player was set up)
-        if audioPlayer != nil {
-            player?.removeObserver(self, forKeyPath: "timeControlStatus")
+        // Remove seek observer
+        if let seekObserver = seekObserver, let player = player {
+            player.removeTimeObserver(seekObserver)
+            self.seekObserver = nil
         }
+        
+        // Remove observer for time control status (set up in setupEventObservers)
+        player?.removeObserver(self, forKeyPath: "timeControlStatus")
+        
+        // Remove observer for external playback (AirPlay)
+        player?.removeObserver(self, forKeyPath: "externalPlaybackActive")
         
         // Remove observer for player item status
         playerItem?.removeObserver(self, forKeyPath: "status")
+        
+        // Remove observers for buffering
+        playerItem?.removeObserver(self, forKeyPath: "playbackBufferEmpty")
+        playerItem?.removeObserver(self, forKeyPath: "playbackLikelyToKeepUp")
         
         // Cleanup custom controls
         controlsOverlay?.removeFromSuperview()
@@ -530,8 +703,11 @@ extension FlutterAVPlayer: CustomPlaybackControlsDelegate {
     }
     
     func didSeek(to time: CMTime) {
+        let seconds = CMTimeGetSeconds(time)
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         audioPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        // Notify seek event
+        notifySeek(seconds: seconds)
     }
     
     func didTapForward10Seconds() {
@@ -614,6 +790,58 @@ extension FlutterAVPlayer: CustomPlaybackControlsDelegate {
         } else {
             DispatchQueue.main.sync {
                 notifyFlutter()
+            }
+        }
+    }
+    
+    // MARK: - Event Notification Methods
+    
+    private func notifyStart() {
+        invokeMethodOnMainThread("onStart", arguments: nil)
+    }
+    
+    private func notifyEnd() {
+        invokeMethodOnMainThread("onEnd", arguments: nil)
+    }
+    
+    private func notifyError(errorMessage: String) {
+        invokeMethodOnMainThread("onError", arguments: ["errorMessage": errorMessage])
+    }
+    
+    private func notifyBuffering(isBuffering: Bool) {
+        invokeMethodOnMainThread("onBuffering", arguments: ["isBuffering": isBuffering])
+    }
+    
+    private func notifySeek(seconds: Double) {
+        invokeMethodOnMainThread("onSeek", arguments: ["second": seconds])
+    }
+    
+    private func notifyPause() {
+        invokeMethodOnMainThread("onPause", arguments: nil)
+    }
+    
+    private func notifyAirPlayTrigger(target: String) {
+        invokeMethodOnMainThread("onAirPlayTrigger", arguments: ["target": target])
+    }
+    
+    private func invokeMethodOnMainThread(_ method: String, arguments: [String: Any]?) {
+        guard let channel = methodChannel else { return }
+        
+        let invoke = {
+            channel.invokeMethod(method, arguments: arguments) { (result: Any?) in
+                if let error = result as? FlutterError {
+                    print("FlutterAVPlayer: Error invoking \(method): \(error)")
+                } else if FlutterMethodNotImplemented.isEqual(result) {
+                    print("FlutterAVPlayer: \(method) method not implemented in Flutter")
+                }
+            }
+        }
+        
+        if Thread.isMainThread {
+            invoke()
+        } else {
+            DispatchQueue.main.async {
+                invoke()
             }
         }
     }

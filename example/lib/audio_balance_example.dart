@@ -9,6 +9,8 @@ class AudioBalanceExample extends StatefulWidget {
 
 class _AudioBalanceExampleState extends State<AudioBalanceExample> {
   AudioBalanceController? _audioController;
+  String _statusMessage = 'Ready';
+  bool _isBuffering = false;
 
   @override
   Widget build(BuildContext context) {
@@ -18,20 +20,111 @@ class _AudioBalanceExampleState extends State<AudioBalanceExample> {
       ),
       body: Column(
         children: [
+          // Status display
+          Container(
+            padding: EdgeInsets.all(16.0),
+            color: Colors.grey[200],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Status: $_statusMessage',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                if (_isBuffering)
+                  Padding(
+                    padding: EdgeInsets.only(top: 8.0),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 8),
+                        Text('Buffering...'),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
           // Video player with extra audio
           Expanded(
             child: FlutterAVPlayerView(
               showPictureInPicture: true,
-              onPlayerClosed: (){
+              onPlayerClosed: () {
                 Navigator.of(context).pop();
               },
-              audioUrl: 'https://staging-media.glo.com/music/10217/4a5c95bd5c40cc74751bbaf1414510cf-preview.m4a?Expires=1764769410&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9zdGFnaW5nLW1lZGlhLmdsby5jb20vbXVzaWMvMTAyMTcvNGE1Yzk1YmQ1YzQwY2M3NDc1MWJiYWYxNDE0NTEwY2YtcHJldmlldy5tNGEiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3NjQ3Njk0MTB9fX1dfQ__&Signature=hRcbb-Nuyv4xoADxy-4wQ3imWcRePKEqgBcREQSOhbWR2x31lsaJQmPBoi6y3tuyUtOEg~GX5e0pZPwfcud~cuLouBzUVYZXHGCP1-h-W6hNyPrElYQ-kakrDPgmMmQgvKWVftEGvcn2DUunnlit~~egK5o~S9ZY7pmiZLLtxuiTVNGY-6UjtenGy~DS0tSL6z9vH-VAML4PpkaNbkyKexBCup9RqziZGwJmEeX6zFJ5XIPqjRZeL-Ek~X5-C82oEViiDJ8hMquDLDolNsjxU7To2xXlE6wzr8ffvc2hECrxe6D8Nzilxn2cyjEOH0PQBfSKF25iqCh3wqNMzMbjBA__&Key-Pair-Id=APKAI5ZIYQVCDU4IM5GA',
+              maxDuration: 120,
+              audioUrl: 'https://staging-media.glo.com/music/10217/4a5c95bd5c40cc74751bbaf1414510cf-preview.m4a?Expires=1765079261&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9zdGFnaW5nLW1lZGlhLmdsby5jb20vbXVzaWMvMTAyMTcvNGE1Yzk1YmQ1YzQwY2M3NDc1MWJiYWYxNDE0NTEwY2YtcHJldmlldy5tNGEiLCJDb25kaXRpb24iOnsiRGF0ZUxlc3NUaGFuIjp7IkFXUzpFcG9jaFRpbWUiOjE3NjUwNzkyNjF9fX1dfQ__&Signature=S4I7dd-J6mues~NhIojb3bCl-1Fy-PqCZWZLSkbEgyG1bAh2srVDcOPPUIwre-a~0NvymIzNvO~i07~f38dXYqDTbHJIu616W4RNW9iHASJqcnDBbOFS41f-ja3Kjrua6Bnve8jrmJ8kG87mhoGSivZISd2sK~vGeR9ogJW805fksMMrZNRTHEGNuXcN7ItVSvZydriNnmjuRQ7BE2lsJRrh3~1sKOMvjyx8qQea1iWqzxJo968wuJUhBUyp30hJGm4lq28IaQW~EJ2Qtr9UrTdDVfw92WwsFHhXIfNtQZhdtCFMHtOOIpPJjciWa4WirqkarkrQPcLYsOmalyxcTA__&Key-Pair-Id=APKAI5ZIYQVCDU4IM5GA',
               urlString:
-              'https://staging-media.glo.com/video/hls/10217/b10ddc3f7baafd7fe095360c97652fdd.m3u8',
+                  'https://staging-media.glo.com/video/hls/10217/b10ddc3f7baafd7fe095360c97652fdd.m3u8',
               onControllerReady: (controller) {
                 setState(() {
                   _audioController = controller;
                 });
+              },
+              // Event listeners
+              onStart: () {
+                setState(() {
+                  _statusMessage = 'Playing';
+                  _isBuffering = false;
+                });
+                print('Video playback started');
+              },
+              onEnd: () {
+                setState(() {
+                  _statusMessage = 'Playback ended';
+                });
+                print('Video playback ended');
+              },
+              onError: (errorMessage) {
+                setState(() {
+                  _statusMessage = 'Error: $errorMessage';
+                });
+                print('Video player error: $errorMessage');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error: $errorMessage'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              },
+              onBuffering: (isBuffering) {
+                setState(() {
+                  _isBuffering = isBuffering;
+                  if (isBuffering) {
+                    _statusMessage = 'Buffering...';
+                  } else {
+                    _statusMessage = 'Playing';
+                  }
+                });
+                print('Buffering: $isBuffering');
+              },
+              onSeek: (second) {
+                setState(() {
+                  _statusMessage = 'Seeking to ${second.toStringAsFixed(1)}s';
+                });
+                print('Seeked to: ${second.toStringAsFixed(2)} seconds');
+              },
+              onPause: () {
+                setState(() {
+                  _statusMessage = 'Paused';
+                });
+                print('Video playback paused');
+              },
+              onAirPlayTrigger: (target) {
+                setState(() {
+                  _statusMessage = 'AirPlay: $target';
+                });
+                print('AirPlay target changed to: $target');
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('AirPlay: $target'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
               },
             ),
           ),

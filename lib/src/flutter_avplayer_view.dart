@@ -19,6 +19,13 @@ class FlutterAVPlayerView extends StatefulWidget {
     this.audioAssetPath,
     this.onControllerReady,
     this.onPlayerClosed,
+    this.onStart,
+    this.onEnd,
+    this.onError,
+    this.onBuffering,
+    this.onSeek,
+    this.onPause,
+    this.onAirPlayTrigger,
     this.showPictureInPicture = false,
   }) : assert(urlString != null || filePath != null || assetPath != null);
 
@@ -54,6 +61,31 @@ class FlutterAVPlayerView extends StatefulWidget {
 
   /// Callback that is called when the player is closed by the user (via close button).
   final VoidCallback? onPlayerClosed;
+
+  /// Callback that is called when playback starts.
+  final VoidCallback? onStart;
+
+  /// Callback that is called when playback ends.
+  final VoidCallback? onEnd;
+
+  /// Callback that is called when an error occurs.
+  /// The error message is passed as a parameter.
+  final ValueChanged<String>? onError;
+
+  /// Callback that is called when buffering state changes.
+  /// true when buffering starts, false when buffering ends.
+  final ValueChanged<bool>? onBuffering;
+
+  /// Callback that is called when seeking occurs.
+  /// The new position in seconds is passed as a parameter.
+  final ValueChanged<double>? onSeek;
+
+  /// Callback that is called when playback is paused.
+  final VoidCallback? onPause;
+
+  /// Callback that is called when AirPlay route changes.
+  /// The target device name is passed as a parameter (e.g., "Apple TV", "Local").
+  final ValueChanged<String>? onAirPlayTrigger;
 
   /// Whether to show the Picture-in-Picture button. Defaults to false.
   final bool showPictureInPicture;
@@ -107,8 +139,52 @@ class _FlutterAVPlayerViewState extends State<FlutterAVPlayerView> {
         print('FlutterAVPlayerView: Received onPlayerClosed from native');
         if (widget.onPlayerClosed != null) {
           widget.onPlayerClosed!();
-        } else {
-          print('FlutterAVPlayerView: onPlayerClosed callback is null');
+        }
+        break;
+      case 'onStart':
+        print('FlutterAVPlayerView: Received onStart from native');
+        if (widget.onStart != null) {
+          widget.onStart!();
+        }
+        break;
+      case 'onEnd':
+        print('FlutterAVPlayerView: Received onEnd from native');
+        if (widget.onEnd != null) {
+          widget.onEnd!();
+        }
+        break;
+      case 'onError':
+        print('FlutterAVPlayerView: Received onError from native');
+        if (widget.onError != null) {
+          final errorMessage = call.arguments['errorMessage'] as String? ?? 'Unknown error';
+          widget.onError!(errorMessage);
+        }
+        break;
+      case 'onBuffering':
+        print('FlutterAVPlayerView: Received onBuffering from native');
+        if (widget.onBuffering != null) {
+          final isBuffering = call.arguments['isBuffering'] as bool? ?? false;
+          widget.onBuffering!(isBuffering);
+        }
+        break;
+      case 'onSeek':
+        print('FlutterAVPlayerView: Received onSeek from native');
+        if (widget.onSeek != null) {
+          final second = call.arguments['second'] as double? ?? 0.0;
+          widget.onSeek!(second);
+        }
+        break;
+      case 'onPause':
+        print('FlutterAVPlayerView: Received onPause from native');
+        if (widget.onPause != null) {
+          widget.onPause!();
+        }
+        break;
+      case 'onAirPlayTrigger':
+        print('FlutterAVPlayerView: Received onAirPlayTrigger from native');
+        if (widget.onAirPlayTrigger != null) {
+          final target = call.arguments['target'] as String? ?? 'Unknown';
+          widget.onAirPlayTrigger!(target);
         }
         break;
       default:
